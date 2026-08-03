@@ -1,0 +1,40 @@
+# Databricks Asset Bundle definition. Deploy with:
+#   databricks bundle deploy -t dev
+#   databricks bundle run -t dev bronze_streaming_job
+bundle:
+  name: fraud-detection-feature-store
+
+include:
+  - resources/*.yml
+
+variables:
+  uc_catalog:
+    description: Unity Catalog catalog for all bronze/silver/feature-store/model assets
+    default: fraud_detection
+  uc_schema:
+    default: feature_store
+  kafka_bootstrap_servers:
+    default: localhost:9092
+  kafka_topic:
+    default: fraud.transactions.raw
+  redis_host:
+    default: localhost
+  redis_port:
+    default: "6379"
+  notebook_path_prefix:
+    default: ${workspace.file_path}/notebooks
+  model_serving_endpoint_name:
+    default: fraud-gbm-realtime
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: ${DATABRICKS_HOST}
+  prod:
+    mode: production
+    workspace:
+      host: ${DATABRICKS_HOST}
+    run_as:
+      service_principal_name: ${DATABRICKS_SERVICE_PRINCIPAL}

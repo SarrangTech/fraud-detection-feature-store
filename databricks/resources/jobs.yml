@@ -1,0 +1,78 @@
+resources:
+  jobs:
+    bronze_streaming_job:
+      name: fraud-detection-bronze-streaming
+      description: Always-on Structured Streaming job, Kafka -> Delta bronze table.
+      tasks:
+        - task_key: bronze_ingest
+          new_cluster: &job_cluster
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: "i3.xlarge" # override per-cloud in your target workspace
+            num_workers: 1
+            spark_conf:
+              spark.databricks.delta.preview.enabled: "true"
+          notebook_task:
+            notebook_path: ${var.notebook_path_prefix}/00_bronze_streaming_consumer
+            base_parameters:
+              uc_catalog: ${var.uc_catalog}
+              uc_schema: ${var.uc_schema}
+              kafka_bootstrap_servers: ${var.kafka_bootstrap_servers}
+              kafka_topic: ${var.kafka_topic}
+              run_mode: continuous
+      # Continuous streaming tasks are restarted automatically by the Jobs scheduler
+      # on failure; this is the recommended pattern instead of a cron trigger.
+      continuous:
+        pause_status: UNPAUSED
+      max_concurrent_runs: 1
+
+    feature_pipeline_job:
+      name: fraud-detection-feature-pipeline
+      description: >
+        Batch pipeline run every 15 minutes: dbt silver models -> Feature Store
+        registration -> model training -> Redis sync for online serving.
+      schedule:
+        quartz_cron_expression: "0 */15 * * * ?"
+        timezone_id: "UTC"
+      tasks:
+        - task_key: dbt_silver_models
+          new_cluster: *job_cluster
+          dbt_task:
+            project_directory: ../../dbt
+            commands:
+              - "dbt deps"
+              - "dbt run"
+              - "dbt test"
+            profiles_directory: ../../dbt
+
+        - task_key: feature_store_registration
+          depends_on:
+            - task_key: dbt_silver_models
+          new_cluster: *job_cluster
+          notebook_task:
+            notebook_path: ${var.notebook_path_prefix}/01_feature_store_registration
+            base_parameters:
+              uc_catalog: ${var.uc_catalog}
+              uc_schema: ${var.uc_schema}
+
+        - task_key: model_training
+          depends_on:
+            - task_key: feature_store_registration
+          new_cluster: *job_cluster
+          notebook_task:
+            notebook_path: ${var.notebook_path_prefix}/02_model_training
+            base_parameters:
+              uc_catalog: ${var.uc_catalog}
+              uc_schema: ${var.uc_schema}
+
+        - task_key: redis_feature_sync
+          depends_on:
+            - task_key: feature_store_registration
+          new_cluster: *job_cluster
+          notebook_task:
+            notebook_path: ${var.notebook_path_prefix}/03_redis_feature_sync
+            base_parameters:
+              uc_catalog: ${var.uc_catalog}
+              uc_schema: ${var.uc_schema}
+              redis_host: ${var.redis_host}
+              redis_port: ${var.redis_port}
+      max_concurrent_runs: 1

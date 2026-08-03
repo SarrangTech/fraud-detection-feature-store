@@ -1,0 +1,36 @@
+version: 2
+
+sources:
+  - name: bronze
+    database: "{{ var('bronze_catalog') }}"
+    schema: "{{ var('bronze_schema') }}"
+    tables:
+      - name: bronze_transactions
+        description: >
+          Raw transaction events landed by the Spark Structured Streaming consumer
+          (notebooks/00_bronze_streaming_consumer.py) from the Kafka topic populated
+          by streaming/producer.py. Append-only.
+        loaded_at_field: _ingested_at
+        columns:
+          - name: transaction_id
+            description: Unique transaction identifier assigned by the producer.
+            tests:
+              - not_null
+          - name: user_id
+            description: >
+              Simulated account identifier. The source Kaggle dataset has no real
+              customer identifier; see data/README.md for how this is derived.
+            tests:
+              - not_null
+          - name: event_time
+            description: Transaction timestamp (dataset's Time offset applied to a fixed epoch).
+            tests:
+              - not_null
+          - name: amount
+            tests:
+              - not_null
+          - name: is_fraud
+            tests:
+              - not_null
+              - accepted_values:
+                  values: [0, 1]

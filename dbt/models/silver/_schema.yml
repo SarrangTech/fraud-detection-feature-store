@@ -1,0 +1,42 @@
+version: 2
+
+models:
+  - name: silver_transaction_features
+    description: >
+      One row per transaction with velocity, spend-pattern, and volatility rolling-
+      window features joined to the raw PCA features and label.
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null
+      - name: user_id
+        tests:
+          - not_null
+      - name: is_fraud
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+      - name: txn_count_1h
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: amount_stddev_24h
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+  - name: silver_user_features
+    description: >
+      One row per user_id -- aggregated features registered into the Databricks
+      Feature Store and synced to Redis for sub-10ms online lookup.
+    columns:
+      - name: user_id
+        tests:
+          - unique
+          - not_null
+      - name: total_txn_count
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: "> 0"

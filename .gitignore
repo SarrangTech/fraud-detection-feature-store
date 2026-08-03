@@ -1,0 +1,50 @@
+# Data
+data/raw/*
+!data/raw/.gitkeep
+*.csv
+*.parquet
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/profiles.yml
+
+# Databricks
+.databricks/
+databricks.yml.bak
+
+# MLflow
+mlruns/
+mlartifacts/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+.git-credentials
+
+# Docker / infra
+kafka-data/
+redis-data/
+zookeeper-data/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

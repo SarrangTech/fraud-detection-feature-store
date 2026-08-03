@@ -1,0 +1,24 @@
+# Databricks Model Serving endpoint for the Unity Catalog-registered fraud model.
+#
+# This endpoint is a secondary deployment target for Databricks-native consumers
+# (SQL AI functions, other jobs/notebooks, batch inference). The consumer-facing,
+# sub-100ms scoring path required by this project (transaction -> Redis lookup ->
+# score -> APPROVE/DECLINE) is served by serving/scoring_api.py instead: a REST
+# round trip to a Databricks Serverless endpoint typically runs 30-80ms on its own
+# before Redis lookup or business logic, which eats most of a 100ms budget. Loading
+# the same registered model in-process next to the Redis client (as scoring_api.py
+# does) keeps the whole pipeline inside the latency target.
+resources:
+  model_serving_endpoints:
+    fraud_gbm_endpoint:
+      name: ${var.model_serving_endpoint_name}
+      config:
+        served_entities:
+          - entity_name: ${var.uc_catalog}.${var.uc_schema}.fraud_gbm_classifier
+            entity_version: "1"
+            workload_size: Small
+            scale_to_zero_enabled: true
+        traffic_config:
+          routes:
+            - served_model_name: fraud_gbm_classifier-1
+              traffic_percentage: 100
