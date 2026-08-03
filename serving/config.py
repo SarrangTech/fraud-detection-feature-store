@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     redis_db: int = 0
     redis_password: str | None = None
     redis_feature_key_prefix: str = "user_features"
+    redis_feature_ttl_seconds: int = 86400
 
     # MLflow / Unity Catalog model registry
     mlflow_tracking_uri: str = "databricks"

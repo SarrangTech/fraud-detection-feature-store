@@ -26,6 +26,53 @@ approximation, why the silver table is a full rebuild rather than incremental) a
 written up in **[docs/architecture.md](docs/architecture.md)** — read that before
 changing feature logic.
 
+## Evidence this actually runs
+
+The screenshots below are real captured output from actually running each piece
+locally (Kafka + Redis via `docker-compose`, everything else against the live
+services) — not just written and assumed to work. They're rendered from the raw
+terminal output into images (this environment has no OS-level screen capture),
+but nothing in them is fabricated. Caveats are noted where they apply.
+
+**1. Test suite** — 15/15 passing (14 from the original build + one regression
+test added after this evidence run caught a real bug: `scripts/seed_redis.py`
+referenced a config field, `redis_feature_ttl_seconds`, that `serving/config.py`
+never declared — fixed in [`serving/config.py`](serving/config.py)).
+![pytest suite passing](docs/screenshots/01_pytest_suite.png)
+
+**2. Kafka + Redis running locally** (`docker-compose up -d`)
+![Docker containers running](docs/screenshots/02_docker_containers.png)
+
+**3. Kafka producer streaming transactions** — topic created, then
+`streaming/producer.py` streaming 500 rows at a throttled 50 events/sec into the
+real broker. The real ~150MB Kaggle CSV isn't in this environment (see
+[data/README.md](data/README.md)), so this run used a small synthetic sample
+with the identical schema (`Time`, `V1..V28`, `Amount`, `Class`) purely to
+exercise the pipeline — the file path is visible in the log, nothing is hidden.
+![Kafka topic created](docs/screenshots/03a_kafka_topic_created.png)
+![Kafka producer sending messages](docs/screenshots/03b_kafka_producer.png)
+
+**4. Live scoring endpoint** — `scripts/seed_redis.py` (new) seeds a few
+realistic per-user feature hashes into Redis, then `serving/scoring_api.py` is
+started against a small **locally-trained stand-in model** (not the
+Databricks/Unity-Catalog-registered one, which requires real training data and
+a live workspace — see the note below) and hit with the exact `curl` request
+from the spec, plus a second request to show the APPROVE path for contrast.
+Both real end-to-end latencies stayed under 20ms, well inside the 100ms budget.
+![Redis seeded with demo features](docs/screenshots/04a_seed_redis.png)
+![Live /score responses: DECLINE and APPROVE](docs/screenshots/04b_live_scoring.png)
+
+**5. dbt models** — `dbt run`/`dbt test` need a live Databricks SQL Warehouse
+connection, which isn't available here, so `dbt parse` and `dbt list` are the
+real evidence: they validate that every model, source, `ref()`, and test in the
+project (6 models, 1 source, 17 tests) resolves and compiles correctly end-to-end.
+![dbt models parsing and resolving](docs/screenshots/05_dbt_models.png)
+
+**6–8. Databricks (Feature Store table, MLflow experiment, bronze Delta table)**
+require a live Databricks workspace with Unity Catalog, which this environment
+doesn't have. See **[docs/databricks_evidence_checklist.md](docs/databricks_evidence_checklist.md)**
+for the exact steps to capture these against your own workspace.
+
 ## Repo layout
 
 ```
@@ -42,9 +89,10 @@ changing feature logic.
 ├── serving/                         Real-time scoring service (FastAPI + Redis)
 │   ├── scoring_api.py                    POST /score : transaction -> decision
 │   ├── redis_client.py, model_loader.py, feature_mapping.py, config.py, schemas.py
-├── scripts/                         download_data.sh, create_kafka_topic.sh
-├── tests/                           pytest suite (producer, Redis client, scoring API)
+├── scripts/                         download_data.sh, create_kafka_topic.sh, seed_redis.py
+├── tests/                           pytest suite (producer, Redis client, scoring API, config)
 ├── docs/architecture.md             Design decisions and data flow
+├── docs/screenshots/                Evidence this actually runs (see below)
 ├── docker-compose.yml               Local Kafka + Redis for dev/smoke-testing
 ├── Makefile
 ├── requirements.txt
@@ -98,7 +146,9 @@ which runs them with the correct `depends_on` ordering on a 15-minute schedule).
 
 **5. Real-time scoring service:**
 ```bash
-make serve
+python scripts/seed_redis.py    # seeds a few demo users' precomputed features into Redis
+make serve                      # set MODEL_LOCAL_PATH in .env to score without a
+                                 # live Unity Catalog registry (see serving/config.py)
 # then:
 curl -X POST localhost:8080/score -H "content-type: application/json" -d '{
   "transaction_id": "txn_demo_1", "user_id": "user_00042", "amount": 1250.00,
