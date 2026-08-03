@@ -80,7 +80,7 @@ for the exact steps to capture these against your own workspace.
 ├── streaming/producer.py            Kafka producer: replays creditcard.csv row-by-row
 ├── notebooks/                       Databricks notebooks (run as Jobs, see databricks/)
 │   ├── 00_bronze_streaming_consumer.py   Structured Streaming: Kafka -> Delta bronze
-│   ├── 01_feature_store_registration.py  Registers dbt's silver_user_features (PK: user_id)
+│   ├── 01_feature_store_registration.py  Registers the user_id-keyed Feature Store table
 │   ├── 02_model_training.py              Time-split + SMOTE + GBM + MLflow + UC registry
 │   └── 03_redis_feature_sync.py          Feature Store -> Redis, for online serving
 ├── dbt/                             Silver feature engineering (velocity, spend, volatility)
@@ -172,7 +172,8 @@ make test    # pytest: producer determinism, Redis client (fakeredis), feature
 - **Split:** time-based 80/20 (train strictly precedes test — no shuffled/random split)
 - **Class imbalance:** SMOTE applied to the training split only (never to test)
 - **Tracking:** MLflow experiment + Unity Catalog model registry
-  (`<catalog>.<schema>.fraud_gbm_classifier`)
+  (`workspace.default.fraud_detection_feature_store` — see `.env.example`/`serving/config.py`
+  for the canonical catalog/schema/model names actually in use)
 - **Target metrics** on the held-out time-based test split: ROC-AUC ≥ 0.97,
   recall ≥ 75% at a 0.30 decision threshold (tuned for recall over precision — missed
   fraud is costlier than a false decline in this domain)

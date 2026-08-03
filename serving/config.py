@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # MLflow / Unity Catalog model registry
     mlflow_tracking_uri: str = "databricks"
     mlflow_registry_uri: str = "databricks-uc"
-    uc_model_name: str = "fraud_detection.feature_store.fraud_gbm_classifier"
+    uc_model_name: str = "workspace.default.fraud_detection_feature_store"
     model_version_or_alias: str = "1"
     # Set to a local path (e.g. a directory produced by mlflow.sklearn.save_model) to
     # score with a local model instead of hitting a Databricks workspace -- used for

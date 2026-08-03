@@ -16,8 +16,8 @@ clean-targets:
 vars:
   # Fully-qualified Unity Catalog location of the bronze table written by
   # notebooks/00_bronze_streaming_consumer.py
-  bronze_catalog: "{{ env_var('UC_CATALOG', 'fraud_detection') }}"
-  bronze_schema: "{{ env_var('UC_SCHEMA', 'feature_store') }}"
+  bronze_catalog: "{{ env_var('UC_CATALOG', 'workspace') }}"
+  bronze_schema: "{{ env_var('UC_SCHEMA', 'fraud_feature_store') }}"
   # Rolling-window lookback sizes, in seconds, shared by all velocity/spend/volatility models
   window_1h_seconds: 3600
   window_24h_seconds: 86400

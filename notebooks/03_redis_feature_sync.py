@@ -13,10 +13,13 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("uc_catalog", "fraud_detection")
-dbutils.widgets.text("uc_schema", "feature_store")
-dbutils.widgets.text("redis_host", "localhost")
-dbutils.widgets.text("redis_port", "6379")
+import os
+
+dbutils.widgets.text("uc_catalog", "workspace")
+dbutils.widgets.text("uc_schema", "fraud_feature_store")
+# Env vars (if set on the cluster) take precedence; localhost:6379 is the default.
+dbutils.widgets.text("redis_host", os.environ.get("REDIS_HOST", "localhost"))
+dbutils.widgets.text("redis_port", os.environ.get("REDIS_PORT", "6379"))
 dbutils.widgets.text("redis_key_prefix", "user_features")
 dbutils.widgets.text("redis_ttl_seconds", "86400")
 

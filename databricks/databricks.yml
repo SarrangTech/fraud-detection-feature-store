@@ -9,10 +9,15 @@ include:
 
 variables:
   uc_catalog:
-    description: Unity Catalog catalog for all bronze/silver/feature-store/model assets
-    default: fraud_detection
+    description: Unity Catalog catalog for all bronze/silver/feature-store assets
+    default: workspace
   uc_schema:
-    default: feature_store
+    default: fraud_feature_store
+  model_full_name:
+    description: >
+      Fully-qualified UC model name. Registered under catalog.default (matching this
+      workspace's existing workspace.default.fraud_detection_v2), not catalog.schema.
+    default: workspace.default.fraud_detection_feature_store
   kafka_bootstrap_servers:
     default: localhost:9092
   kafka_topic:

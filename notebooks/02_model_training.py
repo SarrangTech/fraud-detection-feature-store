@@ -1,19 +1,19 @@
 # Databricks notebook source
 # TITLE: 02_model_training
-# PURPOSE: Train a GradientBoostingClassifier on dbt's silver_transaction_features table
+# PURPOSE: Train a GradientBoostingClassifier on silver_features (one row per transaction)
 #          using a time-based 80/20 split and SMOTE for class imbalance, tracked in MLflow
 #          and registered to the Unity Catalog model registry.
 #
 # WHY TRAINING DOES NOT JOIN THE user_id FEATURE STORE TABLE:
-#   silver_user_features (the Feature Store table, PK=user_id) is an ALL-TIME aggregate
-#   recomputed on every dbt run. Joining it into training rows by user_id alone would leak
-#   the future into the past (e.g. avg_amount_all_time for a January transaction would
-#   include that user's March transactions). silver_transaction_features avoids this by
-#   construction -- every rolling feature uses RANGE BETWEEN ... PRECEDING, i.e. only data
-#   that existed strictly before that transaction. So training uses the exact,
-#   leakage-safe per-transaction features; the user_id Feature Store table is reserved for
-#   the ONLINE serving path (synced to Redis), where an always-fresh aggregate is the best
-#   available proxy at sub-10ms latency. See docs/architecture.md for the full rationale.
+#   user_fraud_features (the Feature Store table, PK=user_id) is an ALL-TIME aggregate.
+#   Joining it into training rows by user_id alone would leak the future into the past
+#   (e.g. avg_amount_all_time for a January transaction would include that user's March
+#   transactions). silver_features avoids this by construction -- every rolling feature
+#   uses RANGE BETWEEN ... PRECEDING, i.e. only data that existed strictly before that
+#   transaction. So training uses the exact, leakage-safe per-transaction features; the
+#   user_id Feature Store table is reserved for the ONLINE serving path (synced to Redis),
+#   where an always-fresh aggregate is the best available proxy at sub-10ms latency. See
+#   docs/architecture.md for the full rationale.
 # PROJECT: Fraud Detection Feature Store
 
 # COMMAND ----------
@@ -23,14 +23,18 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("uc_catalog", "fraud_detection")
-dbutils.widgets.text("uc_schema", "feature_store")
-dbutils.widgets.text("mlflow_experiment", "/Shared/fraud-detection-feature-store")
+dbutils.widgets.text("uc_catalog", "workspace")
+dbutils.widgets.text("uc_schema", "fraud_feature_store")
+dbutils.widgets.text("mlflow_experiment", "/Shared/fraud-detection-feature-store-v3")
+dbutils.widgets.text("model_name", "workspace.default.fraud_detection_feature_store")
 
 CATALOG = dbutils.widgets.get("uc_catalog")
 SCHEMA = dbutils.widgets.get("uc_schema")
-SILVER_TABLE = f"{CATALOG}.{SCHEMA}.silver_transaction_features"
-MODEL_NAME = f"{CATALOG}.{SCHEMA}.fraud_gbm_classifier"
+SILVER_TABLE = f"{CATALOG}.{SCHEMA}.silver_features"
+# Registered under catalog.default, not catalog.schema -- matches this workspace's
+# existing model (workspace.default.fraud_detection_v2); "-feature-store" distinguishes
+# this run from that earlier registration rather than overwriting it.
+MODEL_NAME = dbutils.widgets.get("model_name")
 
 from pyspark.sql import functions as F
 import mlflow
@@ -57,8 +61,10 @@ mlflow.set_experiment(dbutils.widgets.get("mlflow_experiment"))
 
 df_silver = spark.read.table(SILVER_TABLE)
 
+# NOTE: this workspace's silver_features table names its time column `timestamp`
+# (not `event_time`) -- see WORKSPACE_SETUP.md.
 time_stats = df_silver.agg(
-    F.min("event_time").alias("min_time"), F.max("event_time").alias("max_time")
+    F.min("timestamp").alias("min_time"), F.max("timestamp").alias("max_time")
 ).collect()[0]
 min_time, max_time = time_stats["min_time"], time_stats["max_time"]
 split_time = min_time + (max_time - min_time) * 0.80
@@ -67,8 +73,8 @@ print(f"Dataset time range: {min_time} -> {max_time}")
 print(f"Train: {min_time} -> {split_time}")
 print(f"Test:  {split_time} -> {max_time}")
 
-df_train_base = df_silver.filter(F.col("event_time") < F.lit(split_time))
-df_test_base = df_silver.filter(F.col("event_time") >= F.lit(split_time))
+df_train_base = df_silver.filter(F.col("timestamp") < F.lit(split_time))
+df_test_base = df_silver.filter(F.col("timestamp") >= F.lit(split_time))
 
 print(f"Train records: {df_train_base.count()}, fraud: {df_train_base.filter('is_fraud=1').count()}")
 print(f"Test records:  {df_test_base.count()}, fraud: {df_test_base.filter('is_fraud=1').count()}")
@@ -81,8 +87,10 @@ FEATURE_COLS = [
     # Spend patterns
     "total_amount_1h", "total_amount_24h", "avg_amount_24h", "max_amount_24h", "min_amount_24h",
     "amount_vs_avg_24h", "amount_vs_max_7d",
-    # Volatility
-    "amount_stddev_24h", "amount_stddev_7d", "amount_zscore_7d",
+    # Volatility (this workspace's silver_features has no amount_zscore_7d column --
+    # see WORKSPACE_SETUP.md -- so it's omitted here rather than referencing a
+    # column that doesn't exist)
+    "amount_stddev_24h", "amount_stddev_7d",
     # Most predictive PCA components for this dataset + the raw amount
     "V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9", "V10",
     "V11", "V12", "V14", "V16", "V17", "V18", "V19", "V21",

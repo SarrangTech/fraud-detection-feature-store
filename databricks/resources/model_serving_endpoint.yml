@@ -14,11 +14,11 @@ resources:
       name: ${var.model_serving_endpoint_name}
       config:
         served_entities:
-          - entity_name: ${var.uc_catalog}.${var.uc_schema}.fraud_gbm_classifier
+          - entity_name: ${var.model_full_name}
             entity_version: "1"
             workload_size: Small
             scale_to_zero_enabled: true
         traffic_config:
           routes:
-            - served_model_name: fraud_gbm_classifier-1
+            - served_model_name: fraud_detection_feature_store-1
               traffic_percentage: 100

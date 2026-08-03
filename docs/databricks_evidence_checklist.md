@@ -10,23 +10,28 @@ your own workspace and drop the screenshots into `docs/screenshots/` following
 the existing `06_`, `07_`, `08_` numbering, then add them to the Evidence
 section of the README.
 
+This workspace uses `catalog=workspace`, `schema=fraud_feature_store` (see
+[WORKSPACE_SETUP.md](../WORKSPACE_SETUP.md)). Items 6 and 8 already have real data
+sitting in Unity Catalog from a previous session — you may not need to run
+anything at all to capture those two; just open the tables and screenshot them.
+
 ## 6. Feature Store table in Unity Catalog
 
-1. Deploy and run the pipeline against your workspace:
-   ```bash
-   cd databricks && databricks bundle deploy -t dev
-   databricks bundle run -t dev feature_pipeline_job
-   ```
-   (this runs `dbt run` → `notebooks/01_feature_store_registration.py` → `02` → `03`)
-2. In the workspace UI: **Catalog → `fraud_detection` → `feature_store` → `user_fraud_features`**
-3. Screenshot: the **Sample Data** tab (shows `user_id` as the primary key plus the
+`workspace.fraud_feature_store.user_fraud_features` already has 1,000 rows from a
+previous session — nothing needs to run first for this one.
+
+1. In the workspace UI: **Catalog → `workspace` → `fraud_feature_store` → `user_fraud_features`**
+2. Screenshot: the **Sample Data** tab (shows `user_id` as the primary key plus the
    velocity/spend/volatility aggregate columns) and the **Details** tab (shows row
    count, and that it's registered as a Feature Store table, not a plain Delta table).
 
 ## 7. MLflow experiment with metrics
 
-1. After `notebooks/02_model_training.py` runs, open **Experiments** in the workspace
-   sidebar and find `/Shared/fraud-detection-feature-store`.
+This one does need `notebooks/02_model_training.py` to run first (see
+WORKSPACE_SETUP.md for run order) — there's no existing v3 experiment yet.
+
+1. After it runs, open **Experiments** in the workspace sidebar and find
+   `/Shared/fraud-detection-feature-store-v3`.
 2. Open the `gbm_time_split_smote` run.
 3. Screenshot: the run's **Metrics** panel (`roc_auc`, `recall`, `precision`, `f1`,
    `avg_precision`) and, separately, the **Artifacts** tab showing
@@ -36,8 +41,11 @@ section of the README.
 
 ## 8. Bronze Delta table with streaming data
 
-1. With `streaming/producer.py` running and `notebooks/00_bronze_streaming_consumer.py`
-   deployed as the `bronze_streaming_job` (continuous), let it ingest for a few minutes.
-2. In the workspace UI: **Catalog → `fraud_detection` → `feature_store` → `bronze_transactions`**
-3. Screenshot: the **Details** tab (row count, Delta table, partitioning) and the
-   **Sample Data** tab showing real ingested rows with `_ingested_at`/`_source` populated.
+`workspace.fraud_feature_store.bronze_transactions` already has 284,807 rows from a
+previous session (built by an earlier batch load, not the Kafka streaming job in
+this repo — see WORKSPACE_SETUP.md on why notebook `00` is skipped). Nothing needs
+to run first for this one either.
+
+1. In the workspace UI: **Catalog → `workspace` → `fraud_feature_store` → `bronze_transactions`**
+2. Screenshot: the **Details** tab (row count, Delta table, partitioning) and the
+   **Sample Data** tab showing real ingested rows.

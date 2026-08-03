@@ -8,8 +8,8 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("uc_catalog", "fraud_detection")
-dbutils.widgets.text("uc_schema", "feature_store")
+dbutils.widgets.text("uc_catalog", "workspace")
+dbutils.widgets.text("uc_schema", "fraud_feature_store")
 dbutils.widgets.text("kafka_bootstrap_servers", "localhost:9092")
 dbutils.widgets.text("kafka_topic", "fraud.transactions.raw")
 dbutils.widgets.text("trigger_interval", "10 seconds")

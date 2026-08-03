@@ -63,6 +63,7 @@ resources:
             base_parameters:
               uc_catalog: ${var.uc_catalog}
               uc_schema: ${var.uc_schema}
+              model_name: ${var.model_full_name}
 
         - task_key: redis_feature_sync
           depends_on:

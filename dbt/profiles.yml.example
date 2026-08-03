@@ -5,16 +5,16 @@ fraud_feature_store:
   outputs:
     dev:
       type: databricks
-      catalog: "{{ env_var('UC_CATALOG', 'fraud_detection') }}"
-      schema: "{{ env_var('UC_SCHEMA', 'feature_store') }}"
+      catalog: "{{ env_var('UC_CATALOG', 'workspace') }}"
+      schema: "{{ env_var('UC_SCHEMA', 'fraud_feature_store') }}"
       host: "{{ env_var('DATABRICKS_HOST') }}"
       http_path: "{{ env_var('DATABRICKS_HTTP_PATH') }}"
       token: "{{ env_var('DATABRICKS_TOKEN') }}"
       threads: 4
     prod:
       type: databricks
-      catalog: "{{ env_var('UC_CATALOG', 'fraud_detection') }}"
-      schema: "{{ env_var('UC_SCHEMA', 'feature_store') }}"
+      catalog: "{{ env_var('UC_CATALOG', 'workspace') }}"
+      schema: "{{ env_var('UC_SCHEMA', 'fraud_feature_store') }}"
       host: "{{ env_var('DATABRICKS_HOST') }}"
       http_path: "{{ env_var('DATABRICKS_HTTP_PATH') }}"
       token: "{{ env_var('DATABRICKS_TOKEN') }}"
