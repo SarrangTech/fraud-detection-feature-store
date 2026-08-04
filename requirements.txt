@@ -2,14 +2,16 @@
 kafka-python==3.0.9
 python-dotenv==1.2.2
 
-# ── Spark / Delta Lake (Structured Streaming bronze consumer, run on Databricks
-#    or locally against a Spark session for dev/smoke-testing) ───────────────
-pyspark==3.5.1
-delta-spark==3.2.0
+# Note: pyspark / delta-spark are intentionally NOT listed here.
+# notebooks/00_bronze_streaming_consumer.py runs on a Databricks cluster, which
+# manages its own Spark/Delta runtime -- installing pyspark/delta-spark locally
+# isn't required by anything in this repo that actually runs locally (the FastAPI
+# service, the producer, dbt, the tests), and pinning a local Spark version
+# alongside a Databricks Runtime version is a common source of conflicts.
 
 # ── dbt (silver feature engineering models against Databricks SQL) ──────────
-dbt-core==1.8.8
-dbt-databricks==1.8.5
+dbt-core==1.12.0
+dbt-databricks==1.12.3
 
 # ── Databricks platform SDKs ─────────────────────────────────────────────────
 databricks-sdk==0.29.0

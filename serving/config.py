@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # API
     scoring_api_host: str = "0.0.0.0"
     scoring_api_port: int = 8080
+    # Required for every /score request via the X-API-Key header. No default --
+    # an empty/unset key means the service refuses all requests rather than
+    # silently running unauthenticated.
+    scoring_api_key: str | None = None
 
 
 settings = Settings()

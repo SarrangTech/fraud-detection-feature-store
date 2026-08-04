@@ -24,10 +24,8 @@ DEMO_USERS = {
         "avg_daily_spend": 210.0,
         "avg_amount_all_time": 76.50,
         "max_amount_all_time": 410.00,
-        "min_amount_all_time": 5.00,
-        "avg_amount_volatility_24h": 24.10,
+        "avg_amount_volatility": 24.10,
         "amount_stddev_all_time": 38.75,
-        "avg_amount_zscore_7d": 0.2,
     },
     "user_00099": {  # frequent, high-velocity spender -- a $1,250 charge is unremarkable
         "avg_velocity_1h": 2.5,
@@ -36,10 +34,8 @@ DEMO_USERS = {
         "avg_daily_spend": 1800.0,
         "avg_amount_all_time": 640.00,
         "max_amount_all_time": 2100.00,
-        "min_amount_all_time": 40.00,
-        "avg_amount_volatility_24h": 310.0,
+        "avg_amount_volatility": 310.0,
         "amount_stddev_all_time": 290.0,
-        "avg_amount_zscore_7d": 0.1,
     },
     "user_00777": {  # low-activity, low-spend account
         "avg_velocity_1h": 0.05,
@@ -48,10 +44,8 @@ DEMO_USERS = {
         "avg_daily_spend": 35.0,
         "avg_amount_all_time": 28.00,
         "max_amount_all_time": 95.00,
-        "min_amount_all_time": 4.00,
-        "avg_amount_volatility_24h": 9.5,
+        "avg_amount_volatility": 9.5,
         "amount_stddev_all_time": 12.0,
-        "avg_amount_zscore_7d": 0.0,
     },
 }
 

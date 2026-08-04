@@ -9,6 +9,12 @@
 # session (1,000 rows) -- if so, this notebook just reuses it as-is rather than
 # rebuilding it. It only aggregates `silver_features` by user_id and creates the
 # table if `user_fraud_features` doesn't exist yet. See WORKSPACE_SETUP.md.
+#
+# CANONICAL SCHEMA: the column names produced here are the source of truth for
+# user_fraud_features -- this is the path that actually runs against the live
+# workspace. dbt/models/silver/silver_user_features.sql and
+# serving/feature_mapping.py must match these names exactly (see the dbt schema
+# test in dbt/tests/ and README Known Limitations).
 # PROJECT: Fraud Detection Feature Store
 
 # COMMAND ----------

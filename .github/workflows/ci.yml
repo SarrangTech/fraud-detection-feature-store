@@ -1,0 +1,35 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Lint
+        run: ruff check .
+      - name: Test
+        run: pytest tests/ -v --tb=short
+      - name: dbt deps
+        run: cd dbt && dbt deps
+      - name: dbt parse
+        env:
+          # dbt parse doesn't need a real warehouse (see docs/databricks_evidence_checklist.md),
+          # but the databricks adapter still requires these to be set to build a profile.
+          DATABRICKS_HOST: https://ci-placeholder.cloud.databricks.com
+          DATABRICKS_HTTP_PATH: /sql/1.0/warehouses/ci-placeholder
+          DATABRICKS_TOKEN: ci-placeholder-token
+          UC_CATALOG: ci_placeholder_catalog
+          UC_SCHEMA: ci_placeholder_schema
+          DBT_PROFILES_DIR: dbt
+        run: |
+          cp dbt/profiles.yml.example dbt/profiles.yml
+          dbt parse --project-dir dbt --no-partial-parse

@@ -23,10 +23,10 @@ import os
 import signal
 import sys
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator
 
 from dotenv import load_dotenv
 from kafka import KafkaProducer
@@ -57,7 +57,7 @@ class ProducerConfig:
     loop: bool
 
     @classmethod
-    def from_env(cls, args: argparse.Namespace) -> "ProducerConfig":
+    def from_env(cls, args: argparse.Namespace) -> ProducerConfig:
         return cls(
             bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
             topic=os.environ.get("KAFKA_TOPIC_TRANSACTIONS", "fraud.transactions.raw"),
@@ -65,8 +65,8 @@ class ProducerConfig:
             raw_data_path=Path(args.data_path or os.environ.get("RAW_DATA_PATH", "data/raw/creditcard.csv")),
             events_per_second=args.events_per_second
             if args.events_per_second is not None
-            else float(os.environ.get("PRODUCER_EVENTS_PER_SECOND", 20)),
-            user_pool_size=int(os.environ.get("SIMULATED_USER_POOL_SIZE", 5000)),
+            else float(os.environ.get("PRODUCER_EVENTS_PER_SECOND", "20")),
+            user_pool_size=int(os.environ.get("SIMULATED_USER_POOL_SIZE", "5000")),
             limit=args.limit,
             loop=args.loop,
         )

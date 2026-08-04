@@ -1,0 +1,6 @@
+[tool.ruff]
+# notebooks/ only runs inside a Databricks cluster, which injects `dbutils`,
+# `spark`, and `display` as globals at execution time -- they have no import
+# statement and never will, so a standard linter can't evaluate these files
+# meaningfully (see the `make train` comment in the Makefile for the same point).
+extend-exclude = ["notebooks"]

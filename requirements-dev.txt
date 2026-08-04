@@ -1,0 +1,2 @@
+# Dev/lint tooling -- not needed to run the application, only to develop it.
+ruff>=0.4.0

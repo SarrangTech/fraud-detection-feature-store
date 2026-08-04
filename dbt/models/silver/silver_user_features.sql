@@ -13,7 +13,6 @@ select
 
     avg(amount) as avg_amount_all_time,
     max(amount) as max_amount_all_time,
-    min(amount) as min_amount_all_time,
     stddev(amount) as amount_stddev_all_time,
     sum(amount) as total_spend_all_time,
 
@@ -23,8 +22,11 @@ select
     max(txn_count_1h) as max_velocity_1h,
 
     avg(total_amount_24h) as avg_daily_spend,
-    avg(amount_stddev_24h) as avg_amount_volatility_24h,
-    avg(amount_zscore_7d) as avg_amount_zscore_7d,
+    -- NOTE: named avg_amount_volatility, not avg_amount_volatility_24h -- this must
+    -- match notebooks/01_feature_store_registration.py's aggregation and
+    -- serving/feature_mapping.py's expected column name exactly. See the schema
+    -- test in dbt/tests/ and README Known Limitations before renaming.
+    avg(amount_stddev_24h) as avg_amount_volatility,
     avg(amount_vs_avg_24h) as avg_amount_ratio,
 
     -- Per-user baselines of the anonymized PCA features -- cheap behavioral

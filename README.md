@@ -235,7 +235,10 @@ rebuilt.
 python scripts/seed_redis.py    # seed a few accounts' precomputed features into Redis
 make serve                      # set MODEL_LOCAL_PATH in .env to score without a
                                  # live Unity Catalog registry (see serving/config.py)
-curl -X POST localhost:8080/score -H "content-type: application/json" -d '{
+curl -X POST localhost:8080/score \
+  -H "content-type: application/json" \
+  -H "X-API-Key: your-key-here" \
+  -d '{
   "transaction_id": "txn_demo_1", "user_id": "user_00042", "amount": 1250.00,
   "V1": -3.2, "V2": 2.1, "V3": -4.8, "V4": 3.9, "V14": -3.1
 }'
@@ -275,6 +278,20 @@ make test    # producer determinism, Redis client (fakeredis), feature mapping,
   30-80ms, which does not leave headroom inside a 100ms budget once a feature
   lookup and the decision logic are added. The scoring service holds the model
   in-process instead.
+- **Schema synchronization.** The dbt `silver_user_features` model and the
+  Databricks Feature Store registration notebook (`01_feature_store_registration.py`)
+  must be kept in sync manually — they compute the same logical entity via
+  different execution paths. A schema mismatch between them will cause
+  `serving/feature_mapping.py` to silently substitute zero for unresolvable
+  fields. The canonical schema is defined in `01_feature_store_registration.py`
+  (the path that runs against the live workspace); dbt is the offline/batch
+  equivalent, and is schema-tested against it (`dbt/tests/assert_silver_user_features_schema.sql`).
+- **Redis TTL cold-start failure mode.** The flat 24-hour Redis TTL means
+  accounts that transact less frequently than once per day will receive a
+  cold-start feature vector (zeroed history) on their next transaction. This
+  produces an artificially low fraud probability for infrequent-but-legitimate
+  spenders. Mitigation: extend TTL based on observed account activity
+  frequency, or fall back to a population-level baseline rather than zeros.
 
 ## Operational notes
 
