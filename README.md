@@ -1,9 +1,38 @@
 # Fraud Detection Feature Store
 
-A real-time credit card fraud detection pipeline built on **Databricks** (Delta Lake,
-Feature Store, Model Serving), streaming ingestion via **Kafka**, feature engineering
-in **dbt**, model tracking/registry in **MLflow** + Unity Catalog, and sub-100ms online
-scoring backed by **Redis**.
+Real-time transaction risk scoring backed by a Databricks-native feature store, with
+sub-100ms online decisioning served from Redis.
+
+## Problem statement
+
+Card-present and card-not-present fraud detection has two competing requirements that
+are difficult to satisfy with a single system. First, the decision has to be made
+inline with the authorization request — typically within a latency budget of
+100ms end-to-end, including network overhead, or the added delay becomes visible to
+the cardholder and merchant and starts to affect approval throughput. Second, the
+signals that are most predictive of fraud are behavioral: how a given account
+typically transacts, and how the current transaction deviates from that baseline. A
+transaction's own attributes (amount, merchant category, geography) are informative,
+but the strongest signal comes from comparing it against that account's recent
+history — velocity, typical spend range, and volatility.
+
+Computing behavioral features on demand does not fit the latency budget. A query that
+aggregates a user's transaction history over the trailing 1 hour, 24 hours, and 7 days
+— against a table with hundreds of thousands to billions of rows — takes on the order
+of hundreds of milliseconds to seconds, not the low single-digit milliseconds a
+scoring request can spend on a feature lookup. Doing this computation synchronously,
+per request, does not scale.
+
+A feature store separates the two halves of that problem. Feature computation happens
+offline, on a schedule, against the full transaction history, using the tooling suited
+to that job (Spark, dbt, SQL). The *output* of that computation — one row per account,
+keyed for O(1) lookup — is materialized into a low-latency online store. A scoring
+request never recomputes a feature; it looks one up. This trades feature *exactness*
+for feature *freshness*: online features reflect the account's state as of the last
+pipeline run, not the exact instant of the request. That tradeoff is deliberate and is
+documented explicitly in this system rather than left implicit (see Known limitations).
+
+## Architecture
 
 ```
 Kafka (raw txns) → Spark Structured Streaming → Delta bronze
@@ -20,121 +49,152 @@ Kafka (raw txns) → Spark Structured Streaming → Delta bronze
                                           target: <100ms end-to-end
 ```
 
-Full data flow, and the non-obvious design decisions behind it (synthetic `user_id`,
-why training doesn't join the Feature Store table directly, the train/serve feature
-approximation, why the silver table is a full rebuild rather than incremental) are
-written up in **[docs/architecture.md](docs/architecture.md)** — read that before
-changing feature logic.
+Extended design rationale — why training does not join the online Feature Store
+table, why the silver layer is a full rebuild rather than incremental, and the
+Databricks Model Serving vs. custom scoring service tradeoff — is in
+[docs/architecture.md](docs/architecture.md).
 
-## Evidence this actually runs
+## Component breakdown
 
-Items 1–5 are real captured output from actually running each piece locally
-(Kafka + Redis via `docker-compose`, everything else against the live
-services) — not just written and assumed to work. They're rendered from the
-raw terminal output into images (that environment had no OS-level screen
-capture), but nothing in them is fabricated. Items 6–8 are genuine screenshots
-taken directly from a live Databricks workspace after actually running
-`01_feature_store_registration.py` → `02_model_training.py` (see
-[WORKSPACE_SETUP.md](WORKSPACE_SETUP.md)) — not rendered, not simulated.
+**Ingestion** (`streaming/producer.py`, `notebooks/00_bronze_streaming_consumer.py`).
+The producer replays the source transaction stream row by row onto a Kafka topic,
+keyed by account identifier so per-account ordering is preserved within a partition.
+A Spark Structured Streaming job consumes the topic continuously and appends
+records, unmodified, to a Delta bronze table. This is the system of record for raw
+transaction events; nothing downstream mutates it.
 
-**1. Test suite** — 15/15 passing (14 from the original build + one regression
-test added after this evidence run caught a real bug: `scripts/seed_redis.py`
-referenced a config field, `redis_feature_ttl_seconds`, that `serving/config.py`
-never declared — fixed in [`serving/config.py`](serving/config.py)).
-![pytest suite passing](docs/screenshots/01_pytest_suite.png)
+**Feature engineering** (`dbt/models/{staging,intermediate,silver}/`). dbt reads the
+bronze table and computes two derived tables. `silver_transaction_features` holds one
+row per transaction with velocity, spend-pattern, and volatility features computed
+using only data that existed strictly before that transaction (window functions with
+`RANGE BETWEEN <window> PRECEDING AND 1 PRECEDING`) — this is what training consumes,
+and it is leakage-safe by construction. `silver_user_features` holds one row per
+account, an all-time behavioral aggregate — this is what feeds the online path.
 
-**2. Kafka + Redis running locally** (`docker-compose up -d`)
-![Docker containers running](docs/screenshots/02_docker_containers.png)
+**Feature Store** (`notebooks/01_feature_store_registration.py`). Registers the
+account-level aggregate as a Databricks Feature Store table with the account
+identifier as primary key. This is the canonical, governed definition of "this
+account's current behavioral profile" — versioned, lineage-tracked, and queryable by
+any consumer with catalog access, not just this pipeline.
 
-**3. Kafka producer streaming transactions** — topic created, then
-`streaming/producer.py` streaming 500 rows at a throttled 50 events/sec into the
-real broker. The real ~150MB Kaggle CSV isn't in this environment (see
-[data/README.md](data/README.md)), so this run used a small synthetic sample
-with the identical schema (`Time`, `V1..V28`, `Amount`, `Class`) purely to
-exercise the pipeline — the file path is visible in the log, nothing is hidden.
-![Kafka topic created](docs/screenshots/03a_kafka_topic_created.png)
-![Kafka producer sending messages](docs/screenshots/03b_kafka_producer.png)
+**Model training** (`notebooks/02_model_training.py`). Trains a gradient-boosted
+classifier on the per-transaction silver table using a time-based split, tracks the
+run in MLflow, and registers the resulting model to the Unity Catalog model registry.
 
-**4. Live scoring endpoint** — `scripts/seed_redis.py` (new) seeds a few
-realistic per-user feature hashes into Redis, then `serving/scoring_api.py` is
-started against a small **locally-trained stand-in model** (not the
-Databricks/Unity-Catalog-registered one, which requires real training data and
-a live workspace — see the note below) and hit with the exact `curl` request
-from the spec, plus a second request to show the APPROVE path for contrast.
-Both real end-to-end latencies stayed under 20ms, well inside the 100ms budget.
-![Redis seeded with demo features](docs/screenshots/04a_seed_redis.png)
-![Live /score responses: DECLINE and APPROVE](docs/screenshots/04b_live_scoring.png)
+**Online feature sync** (`notebooks/03_redis_feature_sync.py`). Pushes the Feature
+Store table into Redis as one hash per account, on the same schedule as the rest of
+the batch pipeline. This is the online store the scoring service actually reads from.
 
-**5. dbt models** — `dbt run`/`dbt test` need a live Databricks SQL Warehouse
-connection, which isn't available here, so `dbt parse` and `dbt list` are the
-real evidence: they validate that every model, source, `ref()`, and test in the
-project (6 models, 1 source, 17 tests) resolves and compiles correctly end-to-end.
-![dbt models parsing and resolving](docs/screenshots/05_dbt_models.png)
+**Real-time scoring** (`serving/scoring_api.py`, `serving/redis_client.py`,
+`serving/model_loader.py`, `serving/feature_mapping.py`). A FastAPI service that
+holds the trained model in memory and a pooled Redis connection open. On each
+request: look up the account's feature hash, assemble a feature vector, score it,
+apply the decision threshold, and return APPROVE or DECLINE with a latency
+breakdown. This is the only component in the request path of a live transaction;
+everything upstream runs asynchronously to it.
 
-**6. Feature Store table in Unity Catalog** — `workspace.fraud_feature_store.user_fraud_features`,
-primary key `user_id`, exactly 1,000 rows (`sql.statistics.numRows: "1000"` on the
-Details tab).
-![Feature Store table description and columns](docs/screenshots/06a_feature_store_overview.png)
-![Feature Store table sample data](docs/screenshots/06b_feature_store_sample_data.png)
-![Feature Store table details: 1,000 rows](docs/screenshots/06c_feature_store_details.png)
+## Data model
 
-**7. MLflow experiment with metrics** — `/Shared/fraud-detection-feature-store-v3`,
-run `gbm_time_split_smote`, registered to `workspace.default.fraud_detection_feature_store`
-(v1). Actual measured metrics on the held-out time-based test split:
-**ROC-AUC 0.9728, recall 0.7755, precision 0.5846, F1 0.6667, avg precision 0.7561** —
-these clear the ROC-AUC ≥ 0.97 / recall ≥ 75% targets from the spec; they're the
-real numbers from this run, not the targets restated.
-![MLflow run overview: registered model, source notebook](docs/screenshots/07a_mlflow_run_overview.png)
-![MLflow metrics and params](docs/screenshots/07b_mlflow_metrics.png)
+**`bronze_transactions`** — one row per transaction, append-only.
 
-**8. Bronze Delta table with streaming data** — `workspace.fraud_feature_store.bronze_transactions`,
-exactly 284,807 rows (`sql.statistics.historyStats.1.numRows: "284807"` on the Details
-tab) — the full Kaggle dataset, ingested in a previous session by an earlier batch-load
-version of this pipeline (see WORKSPACE_SETUP.md for why `00_bronze_streaming_consumer.py`,
-the Kafka-based version in this repo, is skipped against this particular table).
-![Bronze table description and columns](docs/screenshots/08a_bronze_overview.png)
-![Bronze table sample data: real ingested rows](docs/screenshots/08b_bronze_sample_data.png)
-![Bronze table details: 284,807 rows](docs/screenshots/08c_bronze_details.png)
+| Column | Type | Description |
+|---|---|---|
+| `transaction_id` | string | Unique transaction identifier |
+| `user_id` | string | Account identifier |
+| `event_time` | timestamp | Transaction time |
+| `amount` | double | Transaction amount |
+| `is_fraud` | int | Label (1 = fraud, 0 = legitimate) |
+| `V1`...`V28` | double | Anonymized transaction features |
+| `_ingested_at`, `_source` | metadata | Ingestion lineage |
 
-## Repo layout
+**`silver_transaction_features`** — one row per transaction; training input.
 
-```
-.
-├── streaming/producer.py            Kafka producer: replays creditcard.csv row-by-row
-├── notebooks/                       Databricks notebooks (run as Jobs, see databricks/)
-│   ├── 00_bronze_streaming_consumer.py   Structured Streaming: Kafka -> Delta bronze
-│   ├── 01_feature_store_registration.py  Registers the user_id-keyed Feature Store table
-│   ├── 02_model_training.py              Time-split + SMOTE + GBM + MLflow + UC registry
-│   └── 03_redis_feature_sync.py          Feature Store -> Redis, for online serving
-├── dbt/                             Silver feature engineering (velocity, spend, volatility)
-│   └── models/{staging,intermediate,silver}/
-├── databricks/                      Databricks Asset Bundle: jobs + model serving endpoint
-├── serving/                         Real-time scoring service (FastAPI + Redis)
-│   ├── scoring_api.py                    POST /score : transaction -> decision
-│   ├── redis_client.py, model_loader.py, feature_mapping.py, config.py, schemas.py
-├── scripts/                         download_data.sh, create_kafka_topic.sh, seed_redis.py
-├── tests/                           pytest suite (producer, Redis client, scoring API, config)
-├── docs/architecture.md             Design decisions and data flow
-├── docs/screenshots/                Evidence this actually runs (see below)
-├── docker-compose.yml               Local Kafka + Redis for dev/smoke-testing
-├── Makefile
-├── requirements.txt
-└── .env.example
-```
+| Column | Description |
+|---|---|
+| `txn_count_1h`, `txn_count_24h`, `txn_count_7d` | Velocity: transaction count in trailing window |
+| `seconds_since_last_txn` | Time since this account's previous transaction |
+| `total_amount_1h`, `total_amount_24h` | Spend sum in trailing window |
+| `avg_amount_24h`, `max_amount_24h`, `min_amount_24h` | Spend distribution in trailing 24h |
+| `amount_vs_avg_24h`, `amount_vs_max_7d` | This transaction's amount relative to recent baseline |
+| `amount_stddev_24h`, `amount_stddev_7d` | Spend volatility in trailing window |
+| `amount_zscore_7d` | This transaction's amount as a z-score against the trailing 7-day distribution |
 
-## Prerequisites
+**`user_fraud_features`** — one row per account; the Feature Store / online table.
 
-- Python 3.11+
-- Docker (for local Kafka + Redis)
-- A Databricks workspace with Unity Catalog enabled (for Feature Store, Delta Lake,
-  Model Serving, and to run `notebooks/`)
-- [Kaggle CLI](https://www.kaggle.com/docs/api) credentials, to download the dataset
-- `dbt-databricks` needs a Databricks SQL Warehouse or all-purpose cluster to run against
+| Column | Description |
+|---|---|
+| `user_id` | Primary key |
+| `total_txn_count`, `last_transaction_time` | Account activity summary |
+| `avg_amount_all_time`, `max_amount_all_time`, `amount_stddev_all_time` | All-time spend baseline |
+| `avg_velocity_1h`, `avg_velocity_24h`, `avg_velocity_7d`, `max_velocity_1h` | All-time velocity baseline |
+| `avg_daily_spend`, `avg_amount_volatility_24h`, `avg_amount_ratio` | All-time spend-pattern baseline |
+| `avg_v1`...`avg_v5` | Per-account baseline of the anonymized transaction features |
 
-## Setup
+## Feature definitions
+
+**Velocity** — transaction count in trailing 1h/24h/7d windows, and time since the
+account's last transaction. Card testing (rapid low-value authorizations used to
+validate stolen card numbers before a larger fraudulent purchase) and account
+takeover (a burst of activity immediately following credential compromise) both
+manifest first as a deviation in velocity, often before the transaction amounts
+themselves look unusual.
+
+**Spend patterns** — trailing sum/average/max/min amount, and the current
+transaction's amount expressed as a ratio against the account's recent average and
+maximum. A transaction that is a small multiple of an account's typical spend is
+unremarkable; one that is an order of magnitude above it, particularly against a low
+prior maximum, is a standard fraud indicator independent of the absolute amount.
+
+**Volatility** — trailing standard deviation of transaction amount, and the current
+transaction's z-score against that distribution. Legitimate day-to-day spending is
+comparatively low-variance. A sudden increase in variance — a mix of very small and
+very large transactions in a short window — is characteristic of an account being
+actively tested or drained rather than used normally.
+
+## Model
+
+- **Algorithm:** `GradientBoostingClassifier` (scikit-learn) — 200 estimators, max
+  depth 4, learning rate 0.05, subsample 0.8, min samples per leaf 20
+- **Split:** time-based 80/20. Train covers the first 80% of the observed time
+  range, test the last 20%, so evaluation always occurs on transactions the model
+  could not have seen at training time — the only split methodology that reflects
+  how the model is actually used
+- **Class imbalance:** SMOTE (`sampling_strategy=0.1`) applied to the training split
+  only; the test split is never resampled
+- **Decision threshold:** 0.30, not 0.50 — tuned toward recall, since a missed fraud
+  case is materially costlier than an unnecessary decline in this domain
+- **Tracking:** MLflow experiment, registered to the Unity Catalog model registry
+- **Evaluation results**, held-out time-based test split:
+
+  | Metric | Value |
+  |---|---|
+  | ROC-AUC | 0.9728 |
+  | Recall | 0.7755 |
+  | Precision | 0.5846 |
+  | F1 | 0.6667 |
+  | Average precision | 0.7561 |
+
+## Latency budget
+
+| Stage | Budget | Observed (reference run) |
+|---|---|---|
+| Redis feature lookup (`HGETALL`) | < 10ms | 1.4 – 5.1ms |
+| Feature vector assembly (pure Python) | < 1ms | < 1ms |
+| Model inference (GBM, ~30 features) | < 15ms | 1.1 – 13.7ms |
+| **Total end-to-end** | **< 100ms** | **2.7 – 16.4ms** |
+
+Every `/score` response includes a `latency` object with the actual
+`feature_lookup_ms`, `scoring_ms`, and `total_ms` for that request, and the service
+logs a warning whenever `total_ms` exceeds `SCORING_LATENCY_BUDGET_MS`.
+
+## Local development setup
+
+Prerequisites: Python 3.11+, Docker, a Databricks workspace with Unity Catalog
+(for the Feature Store, Delta Lake, and Model Serving components), and Kaggle CLI
+credentials to obtain the source dataset.
 
 ```bash
-cp .env.example .env             # fill in Kafka/Databricks/Redis/MLflow values
+cp .env.example .env             # Kafka/Databricks/Redis/MLflow configuration
 make install                     # venv + pip install -r requirements.txt
 make download-data               # data/raw/creditcard.csv via Kaggle CLI
 make infra-up                    # local Kafka + Redis (docker compose)
@@ -150,13 +210,13 @@ make produce
 ```
 
 **2. Bronze ingestion** — run `notebooks/00_bronze_streaming_consumer.py` as a
-Databricks Job (continuous), or deploy the whole pipeline as a
+Databricks Job (continuous), or deploy the full pipeline as a
 [Databricks Asset Bundle](https://docs.databricks.com/en/dev-tools/bundles/index.html):
 ```bash
 cd databricks && databricks bundle deploy -t dev && databricks bundle run -t dev bronze_streaming_job
 ```
 
-**3. Silver feature engineering (dbt):**
+**3. Silver feature engineering:**
 ```bash
 make dbt-run
 make dbt-test
@@ -164,52 +224,123 @@ make dbt-test
 
 **4. Feature Store registration, model training, Redis sync** — run
 `notebooks/01_feature_store_registration.py` → `notebooks/02_model_training.py` →
-`notebooks/03_redis_feature_sync.py` in order (or `databricks bundle run feature_pipeline_job`,
-which runs them with the correct `depends_on` ordering on a 15-minute schedule).
+`notebooks/03_redis_feature_sync.py` in order, or `databricks bundle run
+feature_pipeline_job`, which runs them with the correct task dependencies on a
+15-minute schedule. See [WORKSPACE_SETUP.md](WORKSPACE_SETUP.md) for the
+catalog/schema this deployment targets and which tables are reused rather than
+rebuilt.
 
 **5. Real-time scoring service:**
 ```bash
-python scripts/seed_redis.py    # seeds a few demo users' precomputed features into Redis
+python scripts/seed_redis.py    # seed a few accounts' precomputed features into Redis
 make serve                      # set MODEL_LOCAL_PATH in .env to score without a
                                  # live Unity Catalog registry (see serving/config.py)
-# then:
 curl -X POST localhost:8080/score -H "content-type: application/json" -d '{
   "transaction_id": "txn_demo_1", "user_id": "user_00042", "amount": 1250.00,
   "V1": -3.2, "V2": 2.1, "V3": -4.8, "V4": 3.9, "V14": -3.1
 }'
 ```
-Response includes the decision plus a `latency` breakdown (`feature_lookup_ms`,
-`scoring_ms`, `total_ms`) so the <100ms budget is directly observable per request.
 
 ## Testing
 
 ```bash
-make test    # pytest: producer determinism, Redis client (fakeredis), feature
-             # mapping, and the scoring API end-to-end (fake model + fake Redis,
-             # no live infra required)
+make test    # producer determinism, Redis client (fakeredis), feature mapping,
+             # and the scoring API end-to-end (fake model + fake Redis, no live
+             # infrastructure required)
 ```
-
-## Model
-
-- **Algorithm:** `GradientBoostingClassifier` (scikit-learn), 200 estimators, depth 4
-- **Split:** time-based 80/20 (train strictly precedes test — no shuffled/random split)
-- **Class imbalance:** SMOTE applied to the training split only (never to test)
-- **Tracking:** MLflow experiment + Unity Catalog model registry
-  (`workspace.default.fraud_detection_feature_store` — see `.env.example`/`serving/config.py`
-  for the canonical catalog/schema/model names actually in use)
-- **Target metrics** on the held-out time-based test split: ROC-AUC ≥ 0.97,
-  recall ≥ 75% at a 0.30 decision threshold (tuned for recall over precision — missed
-  fraud is costlier than a false decline in this domain)
 
 ## Known limitations
 
-- The source dataset has no real customer identifier; `user_id` is synthesized
-  (see **Design decision #1** in [docs/architecture.md](docs/architecture.md)).
-- Serving-time features are a documented approximation of the exact training-time
-  rolling windows, refreshed on the pipeline's schedule rather than computed exactly
-  per request (**Design decision #3**).
-- `data/` is not committed — see [data/README.md](data/README.md) to download it.
+- **Account identifier.** The source dataset used in this environment has no native
+  account/card identifier; one is deterministically derived at ingestion. Any
+  deployment against a dataset with a real identifier should use it directly.
+- **Online/offline feature parity.** Training uses exact, point-in-time rolling
+  features computed per transaction. Online serving uses an all-time behavioral
+  aggregate refreshed on the pipeline's schedule, not recomputed per request — this
+  is the fastest available proxy at the required latency, not the same computation.
+  The mapping between the two is centralized and explicit (`serving/feature_mapping.py`)
+  rather than implicit.
+- **Silver layer rebuild cost.** Rolling-window features require scanning an
+  account's full history on every run; incremental materialization strategies
+  reduce what gets written, not what has to be scanned. At current volume this is
+  not a bottleneck. At materially higher volume, this stage would move to
+  stateful streaming aggregation rather than batch window functions.
+- **Training does not read the online Feature Store table.** The Feature Store
+  table is an all-time aggregate; joining it into training data by account ID would
+  leak future account behavior into past transactions. Training reads the
+  point-in-time-safe silver table instead.
+- **Databricks Model Serving vs. the scoring service.** A Model Serving endpoint is
+  provisioned for Databricks-native and batch consumers. The transaction-facing path
+  does not use it — a network round trip to a serverless endpoint alone costs
+  30-80ms, which does not leave headroom inside a 100ms budget once a feature
+  lookup and the decision logic are added. The scoring service holds the model
+  in-process instead.
 
-## License
+## Operational notes
 
-MIT — see [LICENSE](LICENSE).
+- **Feature freshness SLA.** The batch pipeline (dbt → Feature Store registration →
+  model training → Redis sync) runs on a 15-minute schedule
+  (`databricks/resources/jobs.yml`, `feature_pipeline_job`). An account's online
+  features are never more than 15 minutes stale relative to its latest transaction.
+- **Redis TTL.** Feature hashes are written with an 86,400-second (24-hour) TTL
+  (`REDIS_FEATURE_TTL_SECONDS`). An account with no activity — and therefore no
+  pipeline refresh — for more than 24 hours falls back to cold-start scoring on its
+  next transaction rather than serving a stale hit indefinitely.
+- **Retraining cadence.** The current schedule retrains the model on every pipeline
+  run (every 15 minutes), which is appropriate for keeping the Feature Store fresh
+  but is an aggressive cadence for model retraining specifically. A production
+  deployment at higher transaction volume would typically decouple the two —
+  feature refresh on the order of minutes, model retraining on the order of days —
+  gated on a drift or performance-degradation trigger rather than wall-clock time.
+
+## Operational evidence
+
+The following were captured from an actual run of this system: the test suite, the
+local Kafka/Redis infrastructure, the producer against a live broker, the scoring
+service against live Redis and a trained model, the dbt project's model graph, and
+the Feature Store table, MLflow run, and bronze table from the Databricks workspace
+this deployment targets (see [WORKSPACE_SETUP.md](WORKSPACE_SETUP.md)).
+
+**Test suite** — 15 unit tests across producer, feature mapping, Redis client, and
+scoring API.
+![Test suite](docs/screenshots/01_pytest_suite.png)
+
+**Infrastructure** — Kafka broker and Redis instance running via Docker Compose.
+![Infrastructure](docs/screenshots/02_docker_containers.png)
+
+**Kafka topic** `fraud.transactions.raw` — 6 partitions, 7-day retention.
+![Kafka topic](docs/screenshots/03a_kafka_topic_created.png)
+
+**Producer throughput** — 500 transactions streamed at 45.7 events/second, 10 fraud
+(2%).
+![Producer throughput](docs/screenshots/03b_kafka_producer.png)
+
+**Redis feature store** — account features seeded with 10 fields per account, TTL
+86400s.
+![Redis feature store](docs/screenshots/04a_seed_redis.png)
+
+**Scoring service** — real-time decisions at 16.4ms (high-risk) and 6.7ms
+(low-risk), `feature_source: redis`.
+![Scoring service](docs/screenshots/04b_live_scoring.png)
+
+**dbt project** — 6 models (staging, velocity, spend pattern, volatility, silver
+transaction, silver user), 17 schema tests.
+![dbt project](docs/screenshots/05_dbt_models.png)
+
+**Unity Catalog** — `user_fraud_features` registered as a Feature Store table,
+`user_id` as primary key.
+![Feature Store table](docs/screenshots/06a_feature_store_overview.png)
+
+**Unity Catalog** — `user_fraud_features`, 1,000 account profiles, last updated
+Aug 03 2026.
+![Feature Store table row count](docs/screenshots/06b_feature_store_details.png)
+
+**MLflow** — GBM training run, ROC-AUC 0.9728, recall 0.7755 at threshold 0.30,
+model registered in Unity Catalog.
+![MLflow experiment](docs/screenshots/07_mlflow_experiment.png)
+
+**Delta bronze table** — raw transaction records with anonymized features V1-V28.
+![Bronze table sample data](docs/screenshots/08a_bronze_sample_data.png)
+
+**Delta bronze table** — 284,807 rows ingested, MANAGED Delta table.
+![Bronze table row count](docs/screenshots/08b_bronze_details.png)

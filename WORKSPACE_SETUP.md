@@ -24,6 +24,10 @@ None of these are recreated or overwritten by the notebooks below; `01`
 specifically checks whether `user_fraud_features` already exists and, if so,
 just reads it instead of rebuilding it.
 
+**`workspace.fraud_feature_store.user_features`** is a separate, legacy artifact
+from an earlier development session, superseded by `user_fraud_features`. No
+notebook in this repo reads or writes it. Safe to ignore or drop.
+
 ## What changed to make this work against your workspace
 
 Beyond the catalog/schema rename itself, three real mismatches had to be fixed —
