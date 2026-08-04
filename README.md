@@ -28,11 +28,14 @@ changing feature logic.
 
 ## Evidence this actually runs
 
-The screenshots below are real captured output from actually running each piece
-locally (Kafka + Redis via `docker-compose`, everything else against the live
-services) — not just written and assumed to work. They're rendered from the raw
-terminal output into images (this environment has no OS-level screen capture),
-but nothing in them is fabricated. Caveats are noted where they apply.
+Items 1–5 are real captured output from actually running each piece locally
+(Kafka + Redis via `docker-compose`, everything else against the live
+services) — not just written and assumed to work. They're rendered from the
+raw terminal output into images (that environment had no OS-level screen
+capture), but nothing in them is fabricated. Items 6–8 are genuine screenshots
+taken directly from a live Databricks workspace after actually running
+`01_feature_store_registration.py` → `02_model_training.py` (see
+[WORKSPACE_SETUP.md](WORKSPACE_SETUP.md)) — not rendered, not simulated.
 
 **1. Test suite** — 15/15 passing (14 from the original build + one regression
 test added after this evidence run caught a real bug: `scripts/seed_redis.py`
@@ -68,10 +71,30 @@ real evidence: they validate that every model, source, `ref()`, and test in the
 project (6 models, 1 source, 17 tests) resolves and compiles correctly end-to-end.
 ![dbt models parsing and resolving](docs/screenshots/05_dbt_models.png)
 
-**6–8. Databricks (Feature Store table, MLflow experiment, bronze Delta table)**
-require a live Databricks workspace with Unity Catalog, which this environment
-doesn't have. See **[docs/databricks_evidence_checklist.md](docs/databricks_evidence_checklist.md)**
-for the exact steps to capture these against your own workspace.
+**6. Feature Store table in Unity Catalog** — `workspace.fraud_feature_store.user_fraud_features`,
+primary key `user_id`, exactly 1,000 rows (`sql.statistics.numRows: "1000"` on the
+Details tab).
+![Feature Store table description and columns](docs/screenshots/06a_feature_store_overview.png)
+![Feature Store table sample data](docs/screenshots/06b_feature_store_sample_data.png)
+![Feature Store table details: 1,000 rows](docs/screenshots/06c_feature_store_details.png)
+
+**7. MLflow experiment with metrics** — `/Shared/fraud-detection-feature-store-v3`,
+run `gbm_time_split_smote`, registered to `workspace.default.fraud_detection_feature_store`
+(v1). Actual measured metrics on the held-out time-based test split:
+**ROC-AUC 0.9728, recall 0.7755, precision 0.5846, F1 0.6667, avg precision 0.7561** —
+these clear the ROC-AUC ≥ 0.97 / recall ≥ 75% targets from the spec; they're the
+real numbers from this run, not the targets restated.
+![MLflow run overview: registered model, source notebook](docs/screenshots/07a_mlflow_run_overview.png)
+![MLflow metrics and params](docs/screenshots/07b_mlflow_metrics.png)
+
+**8. Bronze Delta table with streaming data** — `workspace.fraud_feature_store.bronze_transactions`,
+exactly 284,807 rows (`sql.statistics.historyStats.1.numRows: "284807"` on the Details
+tab) — the full Kaggle dataset, ingested in a previous session by an earlier batch-load
+version of this pipeline (see WORKSPACE_SETUP.md for why `00_bronze_streaming_consumer.py`,
+the Kafka-based version in this repo, is skipped against this particular table).
+![Bronze table description and columns](docs/screenshots/08a_bronze_overview.png)
+![Bronze table sample data: real ingested rows](docs/screenshots/08b_bronze_sample_data.png)
+![Bronze table details: 284,807 rows](docs/screenshots/08c_bronze_details.png)
 
 ## Repo layout
 
